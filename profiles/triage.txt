@@ -7,6 +7,8 @@
 # Use with: idalib-mcp --profile profiles/triage.txt <binary>
 
 list_funcs
+output_read
+func_scan
 list_globals
 imports
 lookup_funcs

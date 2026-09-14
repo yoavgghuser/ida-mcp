@@ -28,7 +28,7 @@ import idaapi
 import idautils
 import idc
 
-from .sync import IDAError
+from .sync import IDAError, IDASyncError, CancelledError
 
 # ============================================================================
 # Analysis Prompt Configuration
@@ -1170,6 +1170,8 @@ def decompile_function_safe(
             else:
                 lines.append(text)
         return "\n".join(lines), None
+    except (CancelledError, IDASyncError):
+        raise
     except IDAError as e:
         return None, str(e)
     except Exception as e:

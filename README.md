@@ -101,6 +101,45 @@ ida-pro-mcp --install
 
 **Important**: Make sure you completely restart IDA and your MCP client for the installation to take effect. Some clients (like Claude) run in the background and need to be quit from the tray icon.
 
+## Large databases and repeated calls
+
+Use `func_scan` for incremental function discovery on large binaries. Follow
+`next_addr` immediately; no cooldown or sleep is required between pages. Its
+page and scan limits bound work per request, not the total database size.
+Use `func_query` when you need global sorting or type filters.
+
+Use `decompile_batch(addrs=["main", "0x401000"], count=5)` to retrieve several
+functions in one request. Pass the same address list and the returned
+`next_offset` as `offset` to resume. Each target has its own error result, so
+an invalid address does not prevent later targets from being processed.
+Address markers and referenced-symbol extraction are optional and disabled
+by default to reduce output and analysis work. Pages attempt at most 20
+functions, with a deadline check between functions; a single slow native
+decompilation can still time out. Cancellation is propagated instead of
+being reported as an ordinary per-function failure.
+
+When any tool's result exceeds the output limit, call
+`output_read(output_id="<id from _meta.ida_mcp>")`. Follow `next_offset` with
+the same ID to read the complete JSON in chunks. Concatenate the `text`
+fields before parsing; individual chunks need not be valid JSON. This uses
+the cached result without repeating analysis or accessing a download URL.
+Reads do not require IDA's main thread and have no cooldown. The cache keeps
+the latest 100 oversized results and their serialized JSON; entries are
+lost on eviction or restart. It is local to the producing IDA instance.
+
+The GUI proxy now waits up to 300 seconds by default instead of 30. Set
+`IDA_MCP_PROXY_TIMEOUT_SEC` in the proxy process environment to another number
+of seconds, or `0` for no socket deadline. This applies to tool requests and
+output downloads. Invalid, negative, and non-finite values use the default.
+
+Other deadlines are independent: `IDA_MCP_TOOL_TIMEOUT_SEC` controls the
+default IDA tool budget (individual tool decorators can override it), while
+`IDA_MCP_WORKER_CALL_TIMEOUT` and `IDA_MCP_OPEN_TIMEOUT` control headless
+worker call/open waits. Client deadlines may also apply. Disabling a proxy
+deadline does not disable these other deadlines or make IDA calls concurrent.
+IDA operations remain serialized on its main thread. These tools operate on
+loaded binaries/IDBs, not source repository trees.
+
 ## Prompt Engineering
 
 LLMs are prone to hallucinations and you need to be specific with your prompting. For reverse engineering the conversion between integers and bytes are especially problematic. Below is a minimal example prompt, feel free to start a discussion or open an issue if you have good results with a different prompt:
@@ -286,6 +325,7 @@ The bundled Codex plugin forwards the runtime's `IDA_MCP_*` configuration variab
 - `lookup_funcs(queries)`: Get function(s) by address or name (auto-detects, accepts list or comma-separated string).
 - `int_convert(inputs)`: Convert numbers to different formats (decimal, hex, bytes, ASCII, binary).
 - `list_funcs(queries)`: List functions (paginated, filtered).
+- `func_scan(start="0x0", count=100, scan_limit=10000, name_contains="", min_size=0)`: Stream functions in address order for large IDBs. Pass the returned `next_addr` as `start` with the same filters until it is null. Empty pages can still have a continuation. Each call examines at most `scan_limit` functions and returns at most `count` matches without building the entire function list. `name_contains` is a case-insensitive literal substring; size is the function's address span. Pages reflect the current IDB, so avoid changing function boundaries while scanning.
 - `list_globals(queries)`: List global variables (paginated, filtered).
 - `imports(offset, count)`: List all imported symbols with module names (paginated).
 - `decompile(addr)`: Decompile function at the given address.

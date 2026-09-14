@@ -1,6 +1,7 @@
 import argparse
 import http.client
 import json
+import math
 import os
 import re
 import sys
@@ -87,6 +88,18 @@ def _get_proxy_request_headers() -> dict[str, str]:
     return headers
 
 
+def _get_proxy_timeout() -> float | None:
+    """Allow long IDA operations; zero explicitly disables the socket deadline."""
+    value = os.getenv("IDA_MCP_PROXY_TIMEOUT_SEC", "300").strip()
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = 300.0
+    if not math.isfinite(seconds) or seconds < 0:
+        seconds = 300.0
+    return seconds or None
+
+
 def _proxy_to_ida(payload: bytes | str | dict) -> dict:
     """Send a JSON-RPC request to the configured IDA instance and return the response."""
     if isinstance(payload, dict):
@@ -94,7 +107,7 @@ def _proxy_to_ida(payload: bytes | str | dict) -> dict:
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
 
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=_get_proxy_timeout())
     try:
         conn.request(
             "POST",
@@ -115,7 +128,7 @@ def _proxy_to_ida(payload: bytes | str | dict) -> dict:
 
 def _proxy_output_download(path: str) -> tuple[int, str, list[tuple[str, str]], bytes]:
     """Proxy a raw output download from the configured IDA instance."""
-    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=30)
+    conn = http.client.HTTPConnection(IDA_HOST, IDA_PORT, timeout=_get_proxy_timeout())
     try:
         conn.request("GET", path)
         response = conn.getresponse()

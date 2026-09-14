@@ -22,7 +22,7 @@ import idc
 
 from .mainthread import get_pump
 from .rpc import tool
-from .sync import idasync, get_tool_deadline
+from .sync import idasync, get_tool_deadline, IDAError
 from .utils import (
     ConvertedNumber,
     EntityQuery,
@@ -596,6 +596,63 @@ def list_funcs(
         results.append(paginate(filtered, offset, count))
 
     return results
+
+
+@tool
+@idasync
+def func_scan(
+    start: Annotated[str, "Inclusive address; resume with next_addr"] = "0x0",
+    count: Annotated[int, "Maximum matches per page (1-1000)"] = 100,
+    scan_limit: Annotated[int, "Maximum functions examined per call (1-100000)"] = 10000,
+    name_contains: Annotated[str, "Case-insensitive literal name substring"] = "",
+    min_size: Annotated[int, "Minimum function address-span size in bytes"] = 0,
+) -> dict[str, Any]:
+    """Stream functions in address order without building a whole-IDB list.
+
+    Resume immediately with next_addr and the same filters, even for empty
+    pages. A null next_addr means done. Pages reflect the live database.
+    """
+    if not 1 <= count <= 1000:
+        raise IDAError("count must be between 1 and 1000")
+    if not 1 <= scan_limit <= 100000:
+        raise IDAError("scan_limit must be between 1 and 100000")
+    if min_size < 0:
+        raise IDAError("min_size must be non-negative")
+    addr = parse_address(start)
+    if addr < 0 or addr >= idaapi.BADADDR:
+        raise IDAError("start must be a valid address below BADADDR")
+    needle = name_contains.casefold()
+    deadline = get_tool_deadline()
+    rows = []
+    scanned = 0
+    reason = "complete"
+    # get_next_func uses IDA's function index, avoiding enumeration of the
+    # already-consumed prefix and duplicate entries for scattered tails.
+    fn = ida_funcs.get_func(addr)
+    if fn is None or fn.start_ea != addr:
+        fn = ida_funcs.get_next_func(addr)
+    while fn is not None:
+        if len(rows) >= count:
+            reason = "count"
+            break
+        if scanned >= scan_limit:
+            reason = "scan_limit"
+            break
+        if deadline is not None and time.monotonic() >= deadline - 0.1:
+            reason = "deadline"
+            break
+        scanned += 1
+        name = ida_funcs.get_func_name(fn.start_ea) or "<unnamed>"
+        size = fn.end_ea - fn.start_ea
+        if size >= min_size and needle in name.casefold():
+            rows.append({"addr": hex(fn.start_ea), "name": name, "size": hex(size)})
+        fn = ida_funcs.get_next_func(fn.start_ea)
+    return {
+        "data": rows,
+        "next_addr": hex(fn.start_ea) if fn is not None else None,
+        "scanned": scanned,
+        "stop_reason": reason,
+    }
 
 
 @tool

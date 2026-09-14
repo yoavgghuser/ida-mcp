@@ -1,5 +1,6 @@
 import json
 import unittest
+import os
 from unittest.mock import patch
 
 from ida_pro_mcp import server
@@ -54,6 +55,13 @@ class _ConnectFailureConnection(_BaseFakeConnection):
 
 
 class DispatchProxyTransportTests(unittest.TestCase):
+    def test_proxy_timeout_configuration(self):
+        for value, expected in [("0", None), ("1200", 1200.0), ("0.5", 0.5),
+                                ("bad", 300.0), ("-1", 300.0), ("nan", 300.0),
+                                ("inf", 300.0), ("", 300.0)]:
+            with self.subTest(value=value), patch.dict(os.environ, {"IDA_MCP_PROXY_TIMEOUT_SEC": value}):
+                self.assertEqual(server._get_proxy_timeout(), expected)
+
     def setUp(self):
         _ResponseFailureConnection.reset()
         _Http503Connection.reset()

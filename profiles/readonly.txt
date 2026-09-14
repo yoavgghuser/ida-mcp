@@ -7,18 +7,21 @@
 
 # --- Core metadata & listings ---
 server_health
+output_read
 list_funcs
 list_globals
 imports
 imports_query
 lookup_funcs
 func_query
+func_scan
 entity_query
 int_convert
 find_regex
 
 # --- Analysis (decomp / disasm / xrefs) ---
 decompile
+decompile_batch
 disasm
 func_profile
 analyze_batch

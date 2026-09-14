@@ -1,5 +1,6 @@
 from itertools import islice
 import struct
+import time
 from typing import Annotated, Any, NotRequired, Optional, TypedDict
 import ida_lines
 import ida_funcs
@@ -15,7 +16,7 @@ import ida_xref
 import ida_ua
 import ida_name
 from .rpc import tool
-from .sync import idasync, tool_timeout, IDAError
+from .sync import idasync, tool_timeout, IDAError, IDASyncError, CancelledError, get_tool_deadline
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -750,6 +751,35 @@ def _profile_function(
 # ============================================================================
 
 
+def _decompile_one(addr: str, include_addresses: bool, include_refs: bool = True) -> DecompileResult:
+    """Shared implementation; callers already hold IDA synchronization."""
+    try:
+        start = parse_address(addr)
+        code, err = decompile_function_safe(start, include_addresses=include_addresses)
+        if code is None:
+            return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
+        result: DecompileResult = {"addr": addr, "code": code}
+        if include_refs:
+            try:
+                import ida_hexrays
+
+                if ida_hexrays.init_hexrays_plugin():
+                    cfunc = ida_hexrays.decompile(start)
+                    if cfunc:
+                        refs = _collect_decompile_refs(cfunc)
+                        if refs:
+                            result["refs"] = refs
+            except (CancelledError, IDASyncError):
+                raise
+            except Exception:
+                pass
+        return result
+    except (CancelledError, IDASyncError):
+        raise
+    except Exception as e:
+        return {"addr": addr, "code": None, "error": str(e)}
+
+
 @tool
 @idasync
 @tool_timeout(90.0)
@@ -760,26 +790,49 @@ def decompile(
     ] = True,
 ) -> DecompileResult:
     """Decompile function(s) at address(es); returns pseudocode and per-item errors."""
-    try:
-        start = parse_address(addr)
-        code, err = decompile_function_safe(start, include_addresses=include_addresses)
-        if code is None:
-            return {"addr": addr, "code": None, "error": err or "Decompilation failed"}
-        result: DecompileResult = {"addr": addr, "code": code}
-        try:
-            import ida_hexrays
+    return _decompile_one(addr, include_addresses)
 
-            if ida_hexrays.init_hexrays_plugin():
-                cfunc = ida_hexrays.decompile(start)
-                if cfunc:
-                    refs = _collect_decompile_refs(cfunc)
-                    if refs:
-                        result["refs"] = refs
-        except Exception:
-            pass
-        return result
-    except Exception as e:
-        return {"addr": addr, "code": None, "error": str(e)}
+
+class DecompileBatchResult(TypedDict):
+    data: list[DecompileResult]
+    next_offset: int | None
+    total: int
+    stop_reason: str
+
+
+@tool
+@idasync
+@tool_timeout(120.0)
+def decompile_batch(
+    addrs: Annotated[list[str], "Ordered function addresses or names; keep unchanged when resuming"],
+    offset: Annotated[int, "Index into addrs; resume with next_offset"] = 0,
+    count: Annotated[int, "Maximum functions attempted per call (1-20)"] = 5,
+    include_addresses: Annotated[bool, "Include address markers in pseudocode"] = False,
+    include_refs: Annotated[bool, "Include referenced symbols; requires extra analysis"] = False,
+) -> DecompileBatchResult:
+    """Decompile a page of functions with per-item errors and immediate resumption.
+
+    Stops between functions when the tool deadline approaches. A single slow
+    native decompilation can still time out. Read oversized responses using
+    output_read and the returned output_id instead of repeating analysis.
+    """
+    if offset < 0 or offset > len(addrs):
+        raise IDAError("offset must be between zero and len(addrs)")
+    if not 1 <= count <= 20:
+        raise IDAError("count must be between 1 and 20")
+    deadline = get_tool_deadline()
+    data = []
+    index = offset
+    end = min(offset + count, len(addrs))
+    reason = "count" if end < len(addrs) else "complete"
+    while index < end:
+        if deadline is not None and time.monotonic() >= deadline - 0.1:
+            reason = "deadline"
+            break
+        data.append(_decompile_one(addrs[index], include_addresses, include_refs))
+        index += 1
+    return {"data": data, "next_offset": index if index < len(addrs) else None,
+            "total": len(addrs), "stop_reason": reason}
 
 
 @tool
