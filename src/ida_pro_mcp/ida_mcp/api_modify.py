@@ -13,7 +13,7 @@ import ida_name
 import ida_ua
 
 from .compat import tinfo_get_udm
-from .rpc import tool
+from .rpc import tool, unsafe
 from .sync import idasync, IDAError
 from .utils import (
     parse_address,
@@ -1317,3 +1317,83 @@ def make_data(
             results.append({"addr": addr_str, "ok": False, "error": str(e)})
 
     return results
+
+
+def _apply_patches_to_buffer(buf: bytearray, patches: list[tuple[int, int]]) -> int:
+    """Write (file_offset, byte) patches into buf. Pure; returns count applied.
+
+    Offsets outside the buffer are skipped so a stray patch can't raise.
+    """
+    applied = 0
+    size = len(buf)
+    for off, value in patches:
+        if 0 <= off < size:
+            buf[off] = value & 0xFF
+            applied += 1
+    return applied
+
+
+class ExportPatchedResult(TypedDict):
+    output_path: str
+    input_path: str
+    patched_bytes: int
+    skipped: int
+    error: NotRequired[str]
+
+
+@tool
+@unsafe
+@idasync
+def export_patched_binary(
+    output_path: Annotated[str, "Filesystem path to write the patched binary to"],
+    overwrite: Annotated[bool, "Overwrite output_path if it already exists (default false)"] = False,
+) -> ExportPatchedResult:
+    """Write the database's applied byte patches back out to a binary on disk.
+
+    Copies the original input file and overlays every patched byte (from
+    patch/patch_asm) at its file offset. This is the step that turns IDB edits
+    into a runnable patched executable.
+    """
+    import os
+
+    input_path = idaapi.get_input_file_path()
+    if not input_path or not os.path.exists(input_path):
+        raise IDAError("original input file is not available on disk; cannot export")
+    if not output_path:
+        raise IDAError("output_path is required")
+    if os.path.abspath(output_path) == os.path.abspath(input_path):
+        raise IDAError("output_path must differ from the original input file")
+    if os.path.exists(output_path) and not overwrite:
+        raise IDAError(f"{output_path} already exists; pass overwrite=true to replace it")
+
+    with open(input_path, "rb") as fh:
+        buf = bytearray(fh.read())
+
+    patches: list[tuple[int, int]] = []
+    skipped = 0
+
+    def _visitor(ea, fpos, org_val, patch_val):
+        nonlocal skipped
+        off = fpos
+        if off is None or off < 0:
+            off = idaapi.get_fileregion_offset(ea)
+        if off is None or off < 0 or off == idaapi.BADADDR:
+            skipped += 1
+        else:
+            patches.append((off, patch_val & 0xFF))
+        return 0
+
+    ida_bytes.visit_patched_bytes(0, idaapi.BADADDR, _visitor)
+
+    applied = _apply_patches_to_buffer(buf, patches)
+    skipped += len(patches) - applied
+
+    with open(output_path, "wb") as fh:
+        fh.write(buf)
+
+    return {
+        "output_path": output_path,
+        "input_path": input_path,
+        "patched_bytes": applied,
+        "skipped": skipped,
+    }

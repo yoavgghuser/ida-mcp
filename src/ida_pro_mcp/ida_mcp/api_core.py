@@ -1200,3 +1200,105 @@ def search_text(
         cursor = {"done": True}
 
     return {"n": len(hits), "hits": hits, "cursor": cursor}
+
+
+class StringItem(TypedDict):
+    addr: str
+    length: int
+    text: str
+    segment: str
+    xrefs: NotRequired[list[dict]]
+
+
+class StringsResult(TypedDict):
+    total: int
+    strings: list[StringItem]
+    next_offset: int | None
+
+
+def _filter_strings(
+    items: list[dict],
+    *,
+    pattern: str = "",
+    min_length: int = 0,
+    segment: str = "",
+    offset: int = 0,
+    count: int = 200,
+) -> dict:
+    """Filter/paginate string items. Pure: items are {addr:int, text:str, seg:str}.
+
+    Kept free of IDA calls so it can be unit-tested directly.
+    """
+    rx = re.compile(pattern) if pattern else None
+    matched = []
+    for it in items:
+        text = it["text"]
+        if min_length and len(text) < min_length:
+            continue
+        if segment and it.get("seg") != segment:
+            continue
+        if rx and not rx.search(text):
+            continue
+        matched.append(it)
+    total = len(matched)
+    page = matched[offset : offset + count] if count else matched[offset:]
+    consumed = offset + len(page)
+    return {"total": total, "items": page, "next_offset": consumed if consumed < total else None}
+
+
+@tool
+@idasync
+def list_strings(
+    filter: Annotated[str, "Regex to match string text (optional)"] = "",
+    min_length: Annotated[int, "Minimum string length (default 4)"] = 4,
+    segment: Annotated[str, "Restrict to this segment name, e.g. '.rdata' (optional)"] = "",
+    with_xrefs: Annotated[bool, "Include cross-references to each string (default false)"] = False,
+    offset: Annotated[int, "Pagination start index (default 0)"] = 0,
+    count: Annotated[int, "Max results (default 200, 0=all)"] = 200,
+) -> StringsResult:
+    """Enumerate strings in the database with regex/segment/length filtering.
+
+    Covers ASCII and UTF-16. Set ``with_xrefs`` to get, per string, the code
+    locations that reference it (and their function names) so you can jump
+    straight from an interesting string to the routine that uses it.
+    """
+    try:
+        cache = _get_strings_cache()
+    except Exception as exc:  # noqa: BLE001
+        raise IDAError(f"failed to enumerate strings: {exc}")
+
+    items = []
+    for ea, text in cache:
+        seg = ida_segment.getseg(ea)
+        seg_name = ida_segment.get_segm_name(seg) if seg else ""
+        items.append({"addr": ea, "text": text, "seg": seg_name})
+
+    try:
+        res = _filter_strings(
+            items, pattern=filter, min_length=min_length, segment=segment, offset=offset, count=count
+        )
+    except re.error as exc:
+        raise IDAError(f"invalid regex {filter!r}: {exc}")
+
+    strings: list[StringItem] = []
+    for it in res["items"]:
+        entry: StringItem = {
+            "addr": hex(it["addr"]),
+            "length": len(it["text"]),
+            "text": it["text"],
+            "segment": it["seg"],
+        }
+        if with_xrefs:
+            xrefs = []
+            for xref in idautils.XrefsTo(it["addr"]):
+                fn = ida_funcs.get_func(xref.frm)
+                xrefs.append(
+                    {
+                        "frm": hex(xref.frm),
+                        "func": ida_funcs.get_func_name(fn.start_ea) if fn else None,
+                    }
+                )
+            entry["xrefs"] = xrefs
+        strings.append(entry)
+
+    return {"total": res["total"], "strings": strings, "next_offset": res["next_offset"]}

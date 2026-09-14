@@ -407,8 +407,14 @@ http://127.0.0.1:13337/mcp?ext=dbg
 
 - `emulate(start, end="", regs=None, write=None, read=None, ...)`: Run x86-64 code from the IDB in the Unicorn engine without launching the process. Every segment is mapped at its real address, so intra-binary calls, jump tables and data references resolve automatically; unresolved external calls are skipped (reported in `calls`) and stray memory accesses lazily map zero pages, so self-contained routines run to completion. Set inputs via `regs`/`write`, read outputs from the returned registers or `read` memory dumps (a `read` address may be `@rax` etc. to dereference a final register). Great for executing string/config decryptors, hashing stubs, and opaque predicates instead of reasoning about them by hand. Requires the optional `unicorn` dependency in IDA's Python (`pip install unicorn`).
 
+## Triage
+
+- `find_crypto()`: Scan the database for well-known cryptographic constants (AES S-boxes, SHA-256/512, MD5/SHA-1 tables and IVs, CRC32 table, base64 alphabets, ChaCha/Salsa sigma). Returns each hit with address and segment. Pairs well with `emulate` (find the crypto, then run it).
+- `detect_capabilities()`: Fingerprint behaviour from imported APIs and strings against a capa-style ruleset. Returns matched capabilities (process injection, persistence, anti-debugging, keylogging, C2, crypto, etc.), each with a MITRE ATT&CK technique id and the evidence that fired it. A triage layer on top of `survey_binary`.
+
 ## Pattern Matching & Search
 
+- `list_strings(filter="", min_length=4, segment="", with_xrefs=False, offset=0, count=200)`: Enumerate strings (ASCII + UTF-16) with regex/segment/length filtering and pagination. With `with_xrefs`, each string carries the code locations that reference it and their function names, so you can jump straight from an interesting string to the routine that uses it.
 - `find_regex(queries)`: Search strings with case-insensitive regex (paginated).
 - `find_bytes(patterns, limit=1000, offset=0)`: Find byte pattern(s) in binary (e.g., "48 8B ?? ??"). Max limit: 10000.
 - `find_insns(sequences, limit=1000, offset=0)`: Find instruction sequence(s) in code. Max limit: 10000.
@@ -426,6 +432,7 @@ http://127.0.0.1:13337/mcp?ext=dbg
 ## Export Operations
 
 - `export_funcs(addrs, format)`: Export function(s) in specified format (json, c_header, or prototypes).
+- `export_patched_binary(output_path, overwrite=False)`: Write the database's applied byte patches (from `patch`/`patch_asm`) back out to a runnable binary on disk, overlaying each patched byte at its file offset. The step that turns IDB edits into a patched executable.
 
 ## Graph Operations
 
