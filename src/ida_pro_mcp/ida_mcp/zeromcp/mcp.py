@@ -769,6 +769,12 @@ class McpServer:
         self.resources = McpRpcRegistry()
         self.prompts = McpRpcRegistry()
 
+        # Cache of generated tool schemas so tools/list doesn't rebuild every
+        # schema by reflection on each call. Keyed by tool name; the cached
+        # (func, schema) pair is reused as long as the same function object is
+        # still registered, so new/re-registered tools refresh automatically.
+        self._tool_schema_cache: dict[str, tuple[Callable, dict]] = {}
+
         self._http_server: HTTPServer | None = None
         self._server_thread: threading.Thread | None = None
         self._running = False
@@ -1026,8 +1032,22 @@ class McpServer:
             tool_group = self._get_tool_extension(func_name)
             if tool_group and tool_group not in enabled:
                 continue  # Skip tools from disabled extension groups
-            tools.append(self._generate_tool_schema(func_name, func))
+            tools.append(self._cached_tool_schema(func_name, func))
         return {"tools": tools}
+
+    def _cached_tool_schema(self, func_name: str, func: Callable) -> dict:
+        """Return the tool's JSON schema, generating it once and caching it.
+
+        The schema depends only on the tool's signature, so it is memoised and
+        reused across tools/list calls. If a name is re-registered to a
+        different function the entry refreshes automatically.
+        """
+        entry = self._tool_schema_cache.get(func_name)
+        if entry is None or entry[0] is not func:
+            schema = self._generate_tool_schema(func_name, func)
+            self._tool_schema_cache[func_name] = (func, schema)
+            return schema
+        return entry[1]
 
     def _get_tool_extension(self, func_name: str) -> str | None:
         """Return extension group name if tool belongs to one, else None"""
