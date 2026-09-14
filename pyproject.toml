@@ -23,12 +23,17 @@ dependencies = [
     "tomli-w>=1.0.0",
 ]
 
+[project.optional-dependencies]
+# Required by the `emulate` tool. Install into IDA's Python to enable it.
+emulate = ["unicorn>=2.0"]
+
 [dependency-groups]
 dev = [
     "coverage>=7.13.4",
     "jsonschema>=4.0",
     "mcp>=1.0",
     "pytest>=9.0.3",
+    "unicorn>=2.0",
 ]
 
 [project.urls]

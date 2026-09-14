@@ -403,6 +403,10 @@ http://127.0.0.1:13337/mcp?ext=dbg
 - `py_eval(code)`: Execute arbitrary Python code in IDA context (returns dict with result/stdout/stderr, supports Jupyter-style evaluation).
 - `analyze_funcs(addrs)`: Comprehensive function analysis (decompilation, assembly, xrefs, callees, callers, strings, constants, basic blocks).
 
+## Emulation
+
+- `emulate(start, end="", regs=None, write=None, read=None, ...)`: Run x86-64 code from the IDB in the Unicorn engine without launching the process. Every segment is mapped at its real address, so intra-binary calls, jump tables and data references resolve automatically; unresolved external calls are skipped (reported in `calls`) and stray memory accesses lazily map zero pages, so self-contained routines run to completion. Set inputs via `regs`/`write`, read outputs from the returned registers or `read` memory dumps (a `read` address may be `@rax` etc. to dereference a final register). Great for executing string/config decryptors, hashing stubs, and opaque predicates instead of reasoning about them by hand. Requires the optional `unicorn` dependency in IDA's Python (`pip install unicorn`).
+
 ## Pattern Matching & Search
 
 - `find_regex(queries)`: Search strings with case-insensitive regex (paginated).
